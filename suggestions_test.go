@@ -4,7 +4,36 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
+
+func TestJaroWinkler(t *testing.T) {
+	// Given
+	for _, testCase := range []struct {
+		a, b     string
+		expected float64
+	}{
+		{"", "", 1},
+		{"a", "", 0},
+		{"", "a", 0},
+		{"a", "a", 1},
+		{"a", "b", 0},
+		{"aa", "aa", 1},
+		{"aa", "bb", 0},
+		{"aaa", "aaa", 1},
+		{"aa", "ab", 0.6666666666666666},
+		{"aa", "ba", 0.6666666666666666},
+		{"ba", "aa", 0.6666666666666666},
+		{"ab", "aa", 0.6666666666666666},
+	} {
+		// When
+		res := jaroWinkler(testCase.a, testCase.b)
+
+		// Then
+		assert.Equal(t, testCase.expected, res)
+	}
+}
 
 func TestSuggestFlag(t *testing.T) {
 	// Given
@@ -23,7 +52,7 @@ func TestSuggestFlag(t *testing.T) {
 		res := suggestFlag(app.Flags, testCase.provided, false)
 
 		// Then
-		expect(t, res, testCase.expected)
+		assert.Equal(t, testCase.expected, res)
 	}
 }
 
@@ -35,7 +64,7 @@ func TestSuggestFlagHideHelp(t *testing.T) {
 	res := suggestFlag(app.Flags, "hlp", true)
 
 	// Then
-	expect(t, res, "--fl")
+	assert.Equal(t, "--fl", res)
 }
 
 func TestSuggestFlagFromError(t *testing.T) {
@@ -56,7 +85,7 @@ func TestSuggestFlagFromError(t *testing.T) {
 		)
 
 		// Then
-		expect(t, res, fmt.Sprintf(SuggestDidYouMeanTemplate+"\n\n", testCase.expected))
+		assert.Equal(t, fmt.Sprintf(SuggestDidYouMeanTemplate+"\n\n", testCase.expected), res)
 	}
 }
 
@@ -68,7 +97,7 @@ func TestSuggestFlagFromErrorWrongError(t *testing.T) {
 	_, err := app.suggestFlagFromError(errors.New("invalid"), "")
 
 	// Then
-	expect(t, true, err != nil)
+	assert.Error(t, err)
 }
 
 func TestSuggestFlagFromErrorWrongCommand(t *testing.T) {
@@ -82,7 +111,7 @@ func TestSuggestFlagFromErrorWrongCommand(t *testing.T) {
 	)
 
 	// Then
-	expect(t, true, err != nil)
+	assert.Error(t, err)
 }
 
 func TestSuggestFlagFromErrorNoSuggestion(t *testing.T) {
@@ -96,7 +125,7 @@ func TestSuggestFlagFromErrorNoSuggestion(t *testing.T) {
 	)
 
 	// Then
-	expect(t, true, err != nil)
+	assert.Error(t, err)
 }
 
 func TestSuggestCommand(t *testing.T) {
@@ -118,6 +147,6 @@ func TestSuggestCommand(t *testing.T) {
 		res := suggestCommand(app.Commands, testCase.provided)
 
 		// Then
-		expect(t, res, testCase.expected)
+		assert.Equal(t, testCase.expected, res)
 	}
 }

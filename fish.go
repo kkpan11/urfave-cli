@@ -67,10 +67,6 @@ func (cmd *Command) writeFishCompletionTemplate(w io.Writer) error {
 func (cmd *Command) prepareFishCommands(commands []*Command, allCommands *[]string, previousCommands []string) []string {
 	completions := []string{}
 	for _, command := range commands {
-		if command.Hidden {
-			continue
-		}
-
 		var completion strings.Builder
 		completion.WriteString(fmt.Sprintf(
 			"complete -r -c %s -n '%s' -a '%s'",
@@ -133,7 +129,6 @@ func (cmd *Command) prepareFishFlags(flags []Flag, previousCommands []string) []
 				completion.WriteString(fmt.Sprintf(
 					" -s %s", strings.TrimSpace(opt),
 				))
-
 			}
 		}
 

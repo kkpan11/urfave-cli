@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"reflect"
@@ -13,47 +14,28 @@ type Value interface {
 	flag.Getter
 }
 
-// simple wrapper to intercept Value operations
-// to check for duplicates
-type valueWrapper struct {
-	value    Value
-	count    int
-	onlyOnce bool
+type boolFlag interface {
+	IsBoolFlag() bool
 }
 
-func (v *valueWrapper) String() string {
-	if v.value == nil {
+type fnValue struct {
+	fn     func(string) error
+	isBool bool
+	v      Value
+}
+
+func (f *fnValue) Get() any           { return f.v.Get() }
+func (f *fnValue) Set(s string) error { return f.fn(s) }
+func (f *fnValue) String() string {
+	if f.v == nil {
 		return ""
 	}
-	return v.value.String()
+	return f.v.String()
 }
 
-func (v *valueWrapper) Set(s string) error {
-	if v.count == 1 && v.onlyOnce {
-		return fmt.Errorf("cant duplicate this flag")
-	}
-	v.count++
-	return v.value.Set(s)
-}
-
-func (v *valueWrapper) Get() any {
-	return v.value.Get()
-}
-
-func (v *valueWrapper) IsBoolFlag() bool {
-	_, ok := v.value.(*boolValue)
-	return ok
-}
-
-func (v *valueWrapper) Serialize() string {
-	if s, ok := v.value.(Serializer); ok {
-		return s.Serialize()
-	}
-	return v.value.String()
-}
-
-func (v *valueWrapper) Count() int {
-	if s, ok := v.value.(Countable); ok {
+func (f *fnValue) IsBoolFlag() bool { return f.isBool }
+func (f *fnValue) Count() int {
+	if s, ok := f.v.(Countable); ok {
 		return s.Count()
 	}
 	return 0
@@ -72,7 +54,7 @@ type ValueCreator[T any, C any] interface {
 // NoConfig is for flags which dont need a custom configuration
 type NoConfig struct{}
 
-// FlagBase[T,C,VC] is a generic flag base which can be used
+// FlagBase [T,C,VC] is a generic flag base which can be used
 // as a boilerplate to implement the most common interfaces
 // used by urfave/cli.
 //
@@ -80,32 +62,27 @@ type NoConfig struct{}
 //	C specifies the configuration required(if any for that flag type)
 //	VC specifies the value creator which creates the flag.Value emulation
 type FlagBase[T any, C any, VC ValueCreator[T, C]] struct {
-	Name string // name of the flag
-
-	Category    string // category of the flag, if any
-	DefaultText string // default text of the flag for usage purposes
-	Usage       string // usage string for help output
-
-	Sources ValueSourceChain // sources to load flag value from
-
-	Required   bool // whether the flag is required or not
-	Hidden     bool // whether to hide the flag in help output
-	Persistent bool // whether the flag needs to be applied to subcommands as well
-
-	Value       T  // default value for this flag if not set by from any source
-	Destination *T // destination pointer for value when set
-
-	Aliases []string // Aliases that are allowed for this flag
-
-	TakesFile bool // whether this flag takes a file argument, mainly for shell completion purposes
-
-	Action func(*Context, T) error // Action callback to be called when flag is set
-
-	Config C // Additional/Custom configuration associated with this flag type
-
-	OnlyOnce bool // whether this flag can be duplicated on the command line
+	Name             string                                   `json:"name"`             // name of the flag
+	Category         string                                   `json:"category"`         // category of the flag, if any
+	DefaultText      string                                   `json:"defaultText"`      // default text of the flag for usage purposes
+	HideDefault      bool                                     `json:"hideDefault"`      // whether to hide the default value in output
+	Usage            string                                   `json:"usage"`            // usage string for help output
+	Sources          ValueSourceChain                         `json:"-"`                // sources to load flag value from
+	Required         bool                                     `json:"required"`         // whether the flag is required or not
+	Hidden           bool                                     `json:"hidden"`           // whether to hide the flag in help output
+	Local            bool                                     `json:"local"`            // whether the flag needs to be applied to subcommands as well
+	Value            T                                        `json:"defaultValue"`     // default value for this flag if not set by from any source
+	Destination      *T                                       `json:"-"`                // destination pointer for value when set
+	Aliases          []string                                 `json:"aliases"`          // Aliases that are allowed for this flag
+	TakesFile        bool                                     `json:"takesFileArg"`     // whether this flag takes a file argument, mainly for shell completion purposes
+	Action           func(context.Context, *Command, T) error `json:"-"`                // Action callback to be called when flag is set
+	Config           C                                        `json:"config"`           // Additional/Custom configuration associated with this flag type
+	OnlyOnce         bool                                     `json:"onlyOnce"`         // whether this flag can be duplicated on the command line
+	Validator        func(T) error                            `json:"-"`                // custom function to validate this flag value
+	ValidateDefaults bool                                     `json:"validateDefaults"` // whether to validate defaults or not
 
 	// unexported fields for internal use
+	count      int   // number of times the flag has been set
 	hasBeenSet bool  // whether the flag has been set from env or file
 	applied    bool  // whether the flag has been applied to a flag set already
 	creator    VC    // value creator for this flag type
@@ -115,7 +92,7 @@ type FlagBase[T any, C any, VC ValueCreator[T, C]] struct {
 // GetValue returns the flags value as string representation and an empty
 // string if the flag takes no value at all.
 func (f *FlagBase[T, C, V]) GetValue() string {
-	if reflect.TypeOf(f.Value).Kind() == reflect.Bool {
+	if !f.TakesValue() {
 		return ""
 	}
 	return fmt.Sprintf("%v", f.Value)
@@ -123,13 +100,15 @@ func (f *FlagBase[T, C, V]) GetValue() string {
 
 // Apply populates the flag given the flag set and environment
 func (f *FlagBase[T, C, V]) Apply(set *flag.FlagSet) error {
+	tracef("apply (flag=%[1]q)", f.Name)
+
 	// TODO move this phase into a separate flag initialization function
 	// if flag has been applied previously then it would have already been set
 	// from env or file. So no need to apply the env set again. However
 	// lots of units tests prior to persistent flags assumed that the
 	// flag can be applied to different flag sets multiple times while still
 	// keeping the env set.
-	if !f.applied || !f.Persistent {
+	if !f.applied || f.Local {
 		newVal := f.Value
 
 		if val, source, found := f.Sources.LookupWithSource(); found {
@@ -142,13 +121,7 @@ func (f *FlagBase[T, C, V]) Apply(set *flag.FlagSet) error {
 					)
 				}
 			} else if val == "" && reflect.TypeOf(f.Value).Kind() == reflect.Bool {
-				val = "false"
-				if err := tmpVal.Set(val); err != nil {
-					return fmt.Errorf(
-						"could not parse %[1]q as %[2]T value from %[3]s for flag %[4]s: %[5]s",
-						val, f.Value, source, f.Name, err,
-					)
-				}
+				_ = tmpVal.Set("false")
 			}
 
 			newVal = tmpVal.Get().(T)
@@ -160,19 +133,50 @@ func (f *FlagBase[T, C, V]) Apply(set *flag.FlagSet) error {
 		} else {
 			f.value = f.creator.Create(newVal, f.Destination, f.Config)
 		}
+
+		// Validate the given default or values set from external sources as well
+		if f.Validator != nil && f.ValidateDefaults {
+			if err := f.Validator(f.value.Get().(T)); err != nil {
+				return err
+			}
+		}
 	}
 
-	vw := &valueWrapper{
-		value:    f.value,
-		onlyOnce: f.OnlyOnce,
+	isBool := false
+	if b, ok := f.value.(boolFlag); ok && b.IsBoolFlag() {
+		isBool = true
 	}
 
 	for _, name := range f.Names() {
-		set.Var(vw, name, f.Usage)
+		set.Var(&fnValue{
+			fn: func(val string) error {
+				if f.count == 1 && f.OnlyOnce {
+					return fmt.Errorf("cant duplicate this flag")
+				}
+				f.count++
+				if err := f.value.Set(val); err != nil {
+					return err
+				}
+				f.hasBeenSet = true
+				if f.Validator != nil {
+					if err := f.Validator(f.value.Get().(T)); err != nil {
+						return err
+					}
+				}
+				return nil
+			},
+			isBool: isBool,
+			v:      f.value,
+		}, name, f.Usage)
 	}
 
 	f.applied = true
 	return nil
+}
+
+// IsDefaultVisible returns true if the flag is not hidden, otherwise false
+func (f *FlagBase[T, C, V]) IsDefaultVisible() bool {
+	return !f.HideDefault
 }
 
 // String returns a readable representation of this value (for usage defaults)
@@ -205,6 +209,10 @@ func (f *FlagBase[T, C, V]) GetCategory() string {
 	return f.Category
 }
 
+func (f *FlagBase[T, C, V]) SetCategory(c string) {
+	f.Category = c
+}
+
 // GetUsage returns the usage string for the flag
 func (f *FlagBase[T, C, V]) GetUsage() string {
 	return f.Usage
@@ -212,21 +220,13 @@ func (f *FlagBase[T, C, V]) GetUsage() string {
 
 // GetEnvVars returns the env vars for this flag
 func (f *FlagBase[T, C, V]) GetEnvVars() []string {
-	vals := []string{}
-
-	for _, src := range f.Sources.Chain {
-		if v, ok := src.(*envVarValueSource); ok {
-			vals = append(vals, v.Key)
-		}
-	}
-
-	return vals
+	return f.Sources.EnvKeys()
 }
 
 // TakesValue returns true if the flag takes a value, otherwise false
 func (f *FlagBase[T, C, V]) TakesValue() bool {
 	var t T
-	return reflect.TypeOf(t).Kind() != reflect.Bool
+	return reflect.TypeOf(t) == nil || reflect.TypeOf(t).Kind() != reflect.Bool
 }
 
 // GetDefaultText returns the default text for this flag
@@ -238,19 +238,10 @@ func (f *FlagBase[T, C, V]) GetDefaultText() string {
 	return v.ToString(f.Value)
 }
 
-// Get returns the flag’s value in the given Context.
-func (f *FlagBase[T, C, V]) Get(ctx *Context) T {
-	if v, ok := ctx.Value(f.Name).(T); ok {
-		return v
-	}
-	var t T
-	return t
-}
-
 // RunAction executes flag action if set
-func (f *FlagBase[T, C, V]) RunAction(ctx *Context) error {
+func (f *FlagBase[T, C, V]) RunAction(ctx context.Context, cmd *Command) error {
 	if f.Action != nil {
-		return f.Action(ctx, f.Get(ctx))
+		return f.Action(ctx, cmd, cmd.Value(f.Name).(T))
 	}
 
 	return nil
@@ -260,11 +251,14 @@ func (f *FlagBase[T, C, V]) RunAction(ctx *Context) error {
 // values from cmd line. This is true for slice and map type flags
 func (f *FlagBase[T, C, VC]) IsMultiValueFlag() bool {
 	// TBD how to specify
+	if reflect.TypeOf(f.Value) == nil {
+		return false
+	}
 	kind := reflect.TypeOf(f.Value).Kind()
 	return kind == reflect.Slice || kind == reflect.Map
 }
 
-// IsPersistent returns true if flag needs to be persistent across subcommands
-func (f *FlagBase[T, C, VC]) IsPersistent() bool {
-	return f.Persistent
+// IsLocal returns false if flag needs to be persistent across subcommands
+func (f *FlagBase[T, C, VC]) IsLocal() bool {
+	return f.Local
 }

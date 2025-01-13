@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"fmt"
 	"strconv"
 )
 
@@ -24,7 +23,7 @@ func (i uintValue) Create(val uint64, p *uint64, c IntegerConfig) Value {
 }
 
 func (i uintValue) ToString(b uint64) string {
-	return fmt.Sprintf("%d", b)
+	return strconv.FormatUint(b, 10)
 }
 
 // Below functions are to satisfy the flag.Value interface
@@ -44,9 +43,12 @@ func (i *uintValue) String() string { return strconv.FormatUint(uint64(*i.val), 
 
 // Uint looks up the value of a local Uint64Flag, returns
 // 0 if not found
-func (cCtx *Context) Uint(name string) uint64 {
-	if v, ok := cCtx.Value(name).(uint64); ok {
+func (cmd *Command) Uint(name string) uint64 {
+	if v, ok := cmd.Value(name).(uint64); ok {
+		tracef("uint available for flag name %[1]q with value=%[2]v (cmd=%[3]q)", name, v, cmd.Name)
 		return v
 	}
+
+	tracef("uint NOT available for flag name %[1]q (cmd=%[2]q)", name, cmd.Name)
 	return 0
 }

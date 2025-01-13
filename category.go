@@ -100,10 +100,32 @@ func newFlagCategories() FlagCategories {
 
 func newFlagCategoriesFromFlags(fs []Flag) FlagCategories {
 	fc := newFlagCategories()
+
+	var categorized bool
+
 	for _, fl := range fs {
 		if cf, ok := fl.(CategorizableFlag); ok {
-			if cf.GetCategory() != "" {
-				fc.AddFlag(cf.GetCategory(), fl)
+			visible := false
+			if vf, ok := fl.(VisibleFlag); ok {
+				visible = vf.IsVisible()
+			}
+			if cat := cf.GetCategory(); cat != "" && visible {
+				fc.AddFlag(cat, fl)
+				categorized = true
+			}
+		}
+	}
+
+	if categorized {
+		for _, fl := range fs {
+			if cf, ok := fl.(CategorizableFlag); ok {
+				visible := false
+				if vf, ok := fl.(VisibleFlag); ok {
+					visible = vf.IsVisible()
+				}
+				if cf.GetCategory() == "" && visible {
+					fc.AddFlag("", fl)
+				}
 			}
 		}
 	}

@@ -1,14 +1,13 @@
 package cli
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"strings"
 )
 
-var (
-	DefaultInverseBoolPrefix = "no-"
-)
+var DefaultInverseBoolPrefix = "no-"
 
 type BoolWithInverseFlag struct {
 	// The BoolFlag which the positive and negative flags are generated from
@@ -28,44 +27,39 @@ type BoolWithInverseFlag struct {
 	negDest *bool
 }
 
-func (s *BoolWithInverseFlag) Flags() []Flag {
-	return []Flag{s.positiveFlag, s.negativeFlag}
+func (parent *BoolWithInverseFlag) Flags() []Flag {
+	return []Flag{parent.positiveFlag, parent.negativeFlag}
 }
 
-func (s *BoolWithInverseFlag) IsSet() bool {
-	return (*s.posCount > 0) || (s.positiveFlag.IsSet() || s.negativeFlag.IsSet())
+func (parent *BoolWithInverseFlag) IsSet() bool {
+	return (*parent.posCount > 0) || (parent.positiveFlag.IsSet() || parent.negativeFlag.IsSet())
 }
 
-func (s *BoolWithInverseFlag) Value() bool {
-	return *s.posDest
+func (parent *BoolWithInverseFlag) Value() bool {
+	return *parent.posDest
 }
 
-func (s *BoolWithInverseFlag) RunAction(ctx *Context) error {
-	if *s.negDest && *s.posDest {
-		return fmt.Errorf("cannot set both flags `--%s` and `--%s`", s.positiveFlag.Name, s.negativeFlag.Name)
+func (parent *BoolWithInverseFlag) RunAction(ctx context.Context, cmd *Command) error {
+	if *parent.negDest && *parent.posDest {
+		return fmt.Errorf("cannot set both flags `--%s` and `--%s`", parent.positiveFlag.Name, parent.negativeFlag.Name)
 	}
 
-	if *s.negDest {
-		err := ctx.Set(s.positiveFlag.Name, "false")
-		if err != nil {
-			return err
-		}
+	if *parent.negDest {
+		_ = cmd.Set(parent.positiveFlag.Name, "false")
 	}
 
-	if s.BoolFlag.Action != nil {
-		return s.BoolFlag.Action(ctx, s.Value())
+	if parent.BoolFlag.Action != nil {
+		return parent.BoolFlag.Action(ctx, cmd, parent.Value())
 	}
 
 	return nil
 }
 
-/*
-initialize creates a new BoolFlag that has an inverse flag
-
-consider a bool flag `--env`, there is no way to set it to false
-this function allows you to set `--env` or `--no-env` and in the command action
-it can be determined that BoolWithInverseFlag.IsSet()
-*/
+// Initialize creates a new BoolFlag that has an inverse flag
+//
+// consider a bool flag `--env`, there is no way to set it to false
+// this function allows you to set `--env` or `--no-env` and in the command action
+// it can be determined that BoolWithInverseFlag.IsSet().
 func (parent *BoolWithInverseFlag) initialize() {
 	child := parent.BoolFlag
 
@@ -89,11 +83,11 @@ func (parent *BoolWithInverseFlag) initialize() {
 	parent.negativeFlag = &BoolFlag{
 		Category:    child.Category,
 		DefaultText: child.DefaultText,
-		Sources:     ValueSourceChain{Chain: append([]ValueSource{}, child.Sources.Chain...)},
+		Sources:     NewValueSourceChain(child.Sources.Chain...),
 		Usage:       child.Usage,
 		Required:    child.Required,
 		Hidden:      child.Hidden,
-		Persistent:  child.Persistent,
+		Local:       child.Local,
 		Value:       child.Value,
 		Destination: parent.negDest,
 		TakesFile:   child.TakesFile,
@@ -108,21 +102,26 @@ func (parent *BoolWithInverseFlag) initialize() {
 	parent.negativeFlag.Name = parent.inverseName()
 	parent.negativeFlag.Aliases = parent.inverseAliases()
 
-	if len(child.Sources.Chain) > 0 {
-		parent.negativeFlag.Sources = ValueSourceChain{Chain: make([]ValueSource, len(child.Sources.Chain))}
+	if len(child.Sources.EnvKeys()) > 0 {
+		sources := []ValueSource{}
 
-		for idx, envVar := range child.GetEnvVars() {
-			parent.negativeFlag.Sources.Chain[idx] = &envVarValueSource{Key: strings.ToUpper(parent.InversePrefix) + envVar}
+		for _, envVar := range child.GetEnvVars() {
+			sources = append(sources, EnvVar(strings.ToUpper(parent.InversePrefix)+envVar))
 		}
+		parent.negativeFlag.Sources = NewValueSourceChain(sources...)
 	}
 }
 
 func (parent *BoolWithInverseFlag) inverseName() string {
+	return parent.inversePrefix() + parent.BoolFlag.Name
+}
+
+func (parent *BoolWithInverseFlag) inversePrefix() string {
 	if parent.InversePrefix == "" {
 		parent.InversePrefix = DefaultInverseBoolPrefix
 	}
 
-	return parent.InversePrefix + parent.BoolFlag.Name
+	return parent.InversePrefix
 }
 
 func (parent *BoolWithInverseFlag) inverseAliases() (aliases []string) {
@@ -136,45 +135,53 @@ func (parent *BoolWithInverseFlag) inverseAliases() (aliases []string) {
 	return
 }
 
-func (s *BoolWithInverseFlag) Apply(set *flag.FlagSet) error {
-	if s.positiveFlag == nil {
-		s.initialize()
+func (parent *BoolWithInverseFlag) Apply(set *flag.FlagSet) error {
+	if parent.positiveFlag == nil {
+		parent.initialize()
 	}
 
-	if err := s.positiveFlag.Apply(set); err != nil {
+	if err := parent.positiveFlag.Apply(set); err != nil {
 		return err
 	}
 
-	if err := s.negativeFlag.Apply(set); err != nil {
+	if err := parent.negativeFlag.Apply(set); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-func (s *BoolWithInverseFlag) Names() []string {
+func (parent *BoolWithInverseFlag) Names() []string {
 	// Get Names when flag has not been initialized
-	if s.positiveFlag == nil {
-		return append(s.BoolFlag.Names(), FlagNames(s.inverseName(), s.inverseAliases())...)
+	if parent.positiveFlag == nil {
+		return append(parent.BoolFlag.Names(), FlagNames(parent.inverseName(), parent.inverseAliases())...)
 	}
 
-	if *s.negDest {
-		return s.negativeFlag.Names()
+	if *parent.negDest {
+		return parent.negativeFlag.Names()
 	}
 
-	if *s.posDest {
-		return s.positiveFlag.Names()
+	if *parent.posDest {
+		return parent.positiveFlag.Names()
 	}
 
-	return append(s.negativeFlag.Names(), s.positiveFlag.Names()...)
+	return append(parent.negativeFlag.Names(), parent.positiveFlag.Names()...)
 }
 
+// String implements the standard Stringer interface.
+//
 // Example for BoolFlag{Name: "env"}
-// --env     (default: false) || --no-env    (default: false)
-func (s *BoolWithInverseFlag) String() string {
-	if s.positiveFlag == nil {
-		return fmt.Sprintf("%s || --%s", s.BoolFlag.String(), s.inverseName())
+// --[no-]env	(default: false)
+func (parent *BoolWithInverseFlag) String() string {
+	out := FlagStringer(parent)
+	i := strings.Index(out, "\t")
+
+	prefix := "--"
+
+	// single character flags are prefixed with `-` instead of `--`
+	if len(parent.Name) == 1 {
+		prefix = "-"
 	}
 
-	return fmt.Sprintf("%s || %s", s.positiveFlag.String(), s.negativeFlag.String())
+	return fmt.Sprintf("%s[%s]%s%s", prefix, parent.inversePrefix(), parent.Name, out[i:])
 }

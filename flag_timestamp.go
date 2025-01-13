@@ -1,7 +1,7 @@
 package cli
 
 import (
-	"flag"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -11,29 +11,36 @@ type TimestampFlag = FlagBase[time.Time, TimestampConfig, timestampValue]
 // TimestampConfig defines the config for timestamp flags
 type TimestampConfig struct {
 	Timezone *time.Location
-	Layout   string
+	// Available layouts for flag value.
+	//
+	// Note that value for formats with missing year/date will be interpreted as current year/date respectively.
+	//
+	// Read more about time layouts: https://pkg.go.dev/time#pkg-constants
+	Layouts []string
 }
 
 // timestampValue wrap to satisfy golang's flag interface.
 type timestampValue struct {
 	timestamp  *time.Time
 	hasBeenSet bool
-	layout     string
+	layouts    []string
 	location   *time.Location
 }
 
+var _ ValueCreator[time.Time, TimestampConfig] = timestampValue{}
+
 // Below functions are to satisfy the ValueCreator interface
 
-func (i timestampValue) Create(val time.Time, p *time.Time, c TimestampConfig) Value {
+func (t timestampValue) Create(val time.Time, p *time.Time, c TimestampConfig) Value {
 	*p = val
 	return &timestampValue{
 		timestamp: p,
-		layout:    c.Layout,
+		layouts:   c.Layouts,
 		location:  c.Timezone,
 	}
 }
 
-func (i timestampValue) ToString(b time.Time) string {
+func (t timestampValue) ToString(b time.Time) string {
 	if b.IsZero() {
 		return ""
 	}
@@ -52,14 +59,63 @@ func (t *timestampValue) Set(value string) error {
 	var timestamp time.Time
 	var err error
 
-	if t.location != nil {
-		timestamp, err = time.ParseInLocation(t.layout, value, t.location)
-	} else {
-		timestamp, err = time.Parse(t.layout, value)
+	if t.location == nil {
+		t.location = time.UTC
+	}
+
+	if len(t.layouts) == 0 {
+		return errors.New("got nil/empty layouts slice")
+	}
+
+	for _, layout := range t.layouts {
+		var locErr error
+
+		timestamp, locErr = time.ParseInLocation(layout, value, t.location)
+		if locErr != nil {
+			if err == nil {
+				err = locErr
+				continue
+			}
+
+			err = newMultiError(err, locErr)
+			continue
+		}
+
+		err = nil
+		break
 	}
 
 	if err != nil {
 		return err
+	}
+
+	defaultTS, _ := time.ParseInLocation(time.TimeOnly, time.TimeOnly, timestamp.Location())
+
+	n := time.Now()
+
+	// If format is missing date (or year only), set it explicitly to current
+	if timestamp.Truncate(time.Hour*24).UnixNano() == defaultTS.Truncate(time.Hour*24).UnixNano() {
+		timestamp = time.Date(
+			n.Year(),
+			n.Month(),
+			n.Day(),
+			timestamp.Hour(),
+			timestamp.Minute(),
+			timestamp.Second(),
+			timestamp.Nanosecond(),
+			timestamp.Location(),
+		)
+	} else if timestamp.Year() == 0 {
+		timestamp = time.Date(
+			n.Year(),
+			timestamp.Month(),
+			timestamp.Day(),
+			timestamp.Hour(),
+			timestamp.Minute(),
+			timestamp.Second(),
+			timestamp.Nanosecond(),
+			timestamp.Location(),
+		)
 	}
 
 	if t.timestamp != nil {
@@ -85,18 +141,12 @@ func (t *timestampValue) Get() any {
 }
 
 // Timestamp gets the timestamp from a flag name
-func (cCtx *Context) Timestamp(name string) *time.Time {
-	if fs := cCtx.lookupFlagSet(name); fs != nil {
-		return lookupTimestamp(name, fs)
+func (cmd *Command) Timestamp(name string) time.Time {
+	if v, ok := cmd.Value(name).(time.Time); ok {
+		tracef("time.Time available for flag name %[1]q with value=%[2]v (cmd=%[3]q)", name, v, cmd.Name)
+		return v
 	}
-	return nil
-}
 
-// Fetches the timestamp value from the local timestampWrap
-func lookupTimestamp(name string, set *flag.FlagSet) *time.Time {
-	f := set.Lookup(name)
-	if f != nil {
-		return (f.Value.(*timestampValue)).Value()
-	}
-	return nil
+	tracef("time.Time NOT available for flag name %[1]q (cmd=%[2]q)", name, cmd.Name)
+	return time.Time{}
 }

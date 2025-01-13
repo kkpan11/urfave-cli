@@ -1,7 +1,7 @@
 package cli
 
 import (
-	"errors"
+	"context"
 	"flag"
 	"fmt"
 	"io"
@@ -34,18 +34,22 @@ var GenerateShellCompletionFlag Flag = &BoolFlag{
 
 // VersionFlag prints the version for the application
 var VersionFlag Flag = &BoolFlag{
-	Name:    "version",
-	Aliases: []string{"v"},
-	Usage:   "print the version",
+	Name:        "version",
+	Aliases:     []string{"v"},
+	Usage:       "print the version",
+	HideDefault: true,
+	Local:       true,
 }
 
 // HelpFlag prints the help for all commands and subcommands.
 // Set to nil to disable the flag.  The subcommand
 // will still be added unless HideHelp or HideHelpCommand is set to true.
 var HelpFlag Flag = &BoolFlag{
-	Name:    "help",
-	Aliases: []string{"h"},
-	Usage:   "show help",
+	Name:        "help",
+	Aliases:     []string{"h"},
+	Usage:       "show help",
+	HideDefault: true,
+	Local:       true,
 }
 
 // FlagStringer converts a flag definition to a string. This is used by help
@@ -91,7 +95,7 @@ func (f FlagsByName) Swap(i, j int) {
 
 // ActionableFlag is an interface that wraps Flag interface and RunAction operation.
 type ActionableFlag interface {
-	RunAction(*Context) error
+	RunAction(context.Context, *Command) error
 }
 
 // Flag is a common interface related to parsing flags in cli.
@@ -134,9 +138,13 @@ type DocGenerationFlag interface {
 
 	// GetEnvVars returns the env vars for this flag
 	GetEnvVars() []string
+
+	// IsDefaultVisible returns whether the default value should be shown in
+	// help text
+	IsDefaultVisible() bool
 }
 
-// DocGenerationSliceFlag extends DocGenerationFlag for slice/map based flags.
+// DocGenerationMultiValueFlag extends DocGenerationFlag for slice/map based flags.
 type DocGenerationMultiValueFlag interface {
 	DocGenerationFlag
 
@@ -161,15 +169,18 @@ type VisibleFlag interface {
 type CategorizableFlag interface {
 	// Returns the category of the flag
 	GetCategory() string
+
+	// Sets the category of the flag
+	SetCategory(string)
 }
 
-// PersistentFlag is an interface to enable detection of flags which are persistent
-// through subcommands
-type PersistentFlag interface {
-	IsPersistent() bool
+// LocalFlag is an interface to enable detection of flags which are local
+// to current command
+type LocalFlag interface {
+	IsLocal() bool
 }
 
-func flagSet(name string, flags []Flag) (*flag.FlagSet, error) {
+func newFlagSet(name string, flags []Flag) (*flag.FlagSet, error) {
 	set := flag.NewFlagSet(name, flag.ContinueOnError)
 
 	for _, f := range flags {
@@ -177,50 +188,10 @@ func flagSet(name string, flags []Flag) (*flag.FlagSet, error) {
 			return nil, err
 		}
 	}
+
 	set.SetOutput(io.Discard)
+
 	return set, nil
-}
-
-func copyFlag(name string, ff *flag.Flag, set *flag.FlagSet) {
-	switch ff.Value.(type) {
-	case Serializer:
-		_ = set.Set(name, ff.Value.(Serializer).Serialize())
-	default:
-		_ = set.Set(name, ff.Value.String())
-	}
-}
-
-func normalizeFlags(flags []Flag, set *flag.FlagSet) error {
-	visited := make(map[string]bool)
-	set.Visit(func(f *flag.Flag) {
-		visited[f.Name] = true
-	})
-	for _, f := range flags {
-		parts := f.Names()
-		if len(parts) == 1 {
-			continue
-		}
-		var ff *flag.Flag
-		for _, name := range parts {
-			name = strings.Trim(name, " ")
-			if visited[name] {
-				if ff != nil {
-					return errors.New("Cannot use two forms of the same flag: " + name + " " + ff.Name)
-				}
-				ff = set.Lookup(name)
-			}
-		}
-		if ff == nil {
-			continue
-		}
-		for _, name := range parts {
-			name = strings.Trim(name, " ")
-			if !visited[name] {
-				copyFlag(name, ff, set)
-			}
-		}
-	}
-	return nil
 }
 
 func visibleFlags(fl []Flag) []Flag {
@@ -331,7 +302,6 @@ func stringifyFlag(f Flag) string {
 	if !ok {
 		return ""
 	}
-
 	placeholder, usage := unquoteUsage(df.GetUsage())
 	needsPlaceholder := df.TakesValue()
 
@@ -341,8 +311,12 @@ func stringifyFlag(f Flag) string {
 
 	defaultValueString := ""
 
-	if s := df.GetDefaultText(); s != "" {
-		defaultValueString = fmt.Sprintf(formatDefault("%s"), s)
+	// don't print default text for required flags
+	if rf, ok := f.(RequiredFlag); !ok || !rf.IsRequired() {
+		isVisible := df.IsDefaultVisible()
+		if s := df.GetDefaultText(); isVisible && s != "" {
+			defaultValueString = fmt.Sprintf(formatDefault("%s"), s)
+		}
 	}
 
 	usageWithDefault := strings.TrimSpace(usage + defaultValueString)

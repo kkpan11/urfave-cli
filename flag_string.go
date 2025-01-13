@@ -21,7 +21,7 @@ type stringValue struct {
 
 // Below functions are to satisfy the ValueCreator interface
 
-func (i stringValue) Create(val string, p *string, c StringConfig) Value {
+func (s stringValue) Create(val string, p *string, c StringConfig) Value {
 	*p = val
 	return &stringValue{
 		destination: p,
@@ -29,11 +29,11 @@ func (i stringValue) Create(val string, p *string, c StringConfig) Value {
 	}
 }
 
-func (i stringValue) ToString(b string) string {
-	if b == "" {
-		return b
+func (s stringValue) ToString(val string) string {
+	if val == "" {
+		return val
 	}
-	return fmt.Sprintf("%q", b)
+	return fmt.Sprintf("%q", val)
 }
 
 // Below functions are to satisfy the flag.Value interface
@@ -55,9 +55,12 @@ func (s *stringValue) String() string {
 	return ""
 }
 
-func (cCtx *Context) String(name string) string {
-	if v, ok := cCtx.Value(name).(string); ok {
+func (cmd *Command) String(name string) string {
+	if v, ok := cmd.Value(name).(string); ok {
+		tracef("string available for flag name %[1]q with value=%[2]v (cmd=%[3]q)", name, v, cmd.Name)
 		return v
 	}
+
+	tracef("string NOT available for flag name %[1]q (cmd=%[2]q)", name, cmd.Name)
 	return ""
 }

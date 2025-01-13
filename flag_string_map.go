@@ -1,27 +1,20 @@
 package cli
 
-import "flag"
-
-type StringMap = MapBase[string, StringConfig, stringValue]
-type StringMapFlag = FlagBase[map[string]string, StringConfig, StringMap]
+type (
+	StringMap     = MapBase[string, StringConfig, stringValue]
+	StringMapFlag = FlagBase[map[string]string, StringConfig, StringMap]
+)
 
 var NewStringMap = NewMapBase[string, StringConfig, stringValue]
 
 // StringMap looks up the value of a local StringMapFlag, returns
 // nil if not found
-func (cCtx *Context) StringMap(name string) map[string]string {
-	if fs := cCtx.lookupFlagSet(name); fs != nil {
-		return lookupStringMap(name, fs)
+func (cmd *Command) StringMap(name string) map[string]string {
+	if v, ok := cmd.Value(name).(map[string]string); ok {
+		tracef("string map available for flag name %[1]q with value=%[2]v (cmd=%[3]q)", name, v, cmd.Name)
+		return v
 	}
-	return nil
-}
 
-func lookupStringMap(name string, set *flag.FlagSet) map[string]string {
-	f := set.Lookup(name)
-	if f != nil {
-		if mapping, ok := f.Value.(flag.Getter).Get().(map[string]string); ok {
-			return mapping
-		}
-	}
+	tracef("string map NOT available for flag name %[1]q (cmd=%[2]q)", name, cmd.Name)
 	return nil
 }

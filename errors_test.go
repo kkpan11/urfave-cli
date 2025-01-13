@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestHandleExitCoder_nil(t *testing.T) {
@@ -22,8 +24,8 @@ func TestHandleExitCoder_nil(t *testing.T) {
 
 	HandleExitCoder(nil)
 
-	expect(t, exitCode, 0)
-	expect(t, called, false)
+	assert.Equal(t, 0, exitCode)
+	assert.False(t, called)
 }
 
 func TestHandleExitCoder_ExitCoder(t *testing.T) {
@@ -41,8 +43,8 @@ func TestHandleExitCoder_ExitCoder(t *testing.T) {
 
 	HandleExitCoder(Exit("galactic perimeter breach", 9))
 
-	expect(t, exitCode, 9)
-	expect(t, called, true)
+	assert.Equal(t, 9, exitCode)
+	assert.True(t, called)
 }
 
 func TestHandleExitCoder_ErrorExitCoder(t *testing.T) {
@@ -60,8 +62,8 @@ func TestHandleExitCoder_ErrorExitCoder(t *testing.T) {
 
 	HandleExitCoder(Exit(errors.New("galactic perimeter breach"), 9))
 
-	expect(t, exitCode, 9)
-	expect(t, called, true)
+	assert.Equal(t, 9, exitCode)
+	assert.True(t, called)
 }
 
 func TestHandleExitCoder_MultiErrorWithExitCoder(t *testing.T) {
@@ -79,11 +81,60 @@ func TestHandleExitCoder_MultiErrorWithExitCoder(t *testing.T) {
 
 	exitErr := Exit("galactic perimeter breach", 9)
 	exitErr2 := Exit("last ExitCoder", 11)
+
 	err := newMultiError(errors.New("wowsa"), errors.New("egad"), exitErr, exitErr2)
 	HandleExitCoder(err)
 
-	expect(t, exitCode, 11)
-	expect(t, called, true)
+	assert.Equal(t, 11, exitCode)
+	assert.True(t, called)
+}
+
+type exitFormatter struct {
+	code int
+}
+
+func (f *exitFormatter) Format(s fmt.State, verb rune) {
+	_, _ = s.Write([]byte("some other special"))
+}
+
+func (f *exitFormatter) ExitCode() int {
+	return f.code
+}
+
+func (f *exitFormatter) Error() string {
+	return fmt.Sprintf("my special error code %d", f.code)
+}
+
+func TestHandleExitCoder_ErrorFormatter(t *testing.T) {
+	exitCode := 0
+	called := false
+
+	OsExiter = func(rc int) {
+		if !called {
+			exitCode = rc
+			called = true
+		}
+	}
+
+	oldWriter := ErrWriter
+	var buf bytes.Buffer
+	ErrWriter = &buf
+	defer func() {
+		OsExiter = fakeOsExiter
+		ErrWriter = oldWriter
+	}()
+
+	exitErr := Exit("galactic perimeter breach", 9)
+	exitErr2 := Exit("last ExitCoder", 11)
+	exitErr3 := &exitFormatter{code: 12}
+
+	// add some recursion for multi error to fix test coverage
+	err := newMultiError(errors.New("wowsa"), errors.New("egad"), exitErr3, newMultiError(exitErr, exitErr2))
+	HandleExitCoder(err)
+
+	assert.Equal(t, 11, exitCode)
+	assert.True(t, called)
+	assert.Contains(t, buf.String(), "some other special")
 }
 
 func TestHandleExitCoder_MultiErrorWithoutExitCoder(t *testing.T) {
@@ -102,8 +153,8 @@ func TestHandleExitCoder_MultiErrorWithoutExitCoder(t *testing.T) {
 	err := newMultiError(errors.New("wowsa"), errors.New("egad"))
 	HandleExitCoder(err)
 
-	expect(t, exitCode, 1)
-	expect(t, called, true)
+	assert.Equal(t, 1, exitCode)
+	assert.True(t, called)
 }
 
 // make a stub to not import pkg/errors
@@ -137,8 +188,8 @@ func TestHandleExitCoder_ErrorWithFormat(t *testing.T) {
 	err := Exit(NewErrorWithFormat("I am formatted"), 1)
 	HandleExitCoder(err)
 
-	expect(t, called, true)
-	expect(t, ErrWriter.(*bytes.Buffer).String(), "This the format: I am formatted\n")
+	assert.True(t, called)
+	assert.Equal(t, ErrWriter.(*bytes.Buffer).String(), "This the format: I am formatted\n")
 }
 
 func TestHandleExitCoder_MultiErrorWithFormat(t *testing.T) {
@@ -156,8 +207,8 @@ func TestHandleExitCoder_MultiErrorWithFormat(t *testing.T) {
 	err := newMultiError(NewErrorWithFormat("err1"), NewErrorWithFormat("err2"))
 	HandleExitCoder(err)
 
-	expect(t, called, true)
-	expect(t, ErrWriter.(*bytes.Buffer).String(), "This the format: err1\nThis the format: err2\n")
+	assert.True(t, called)
+	assert.Equal(t, ErrWriter.(*bytes.Buffer).String(), "This the format: err1\nThis the format: err2\n")
 }
 
 func TestMultiErrorErrorsCopy(t *testing.T) {
@@ -167,5 +218,17 @@ func TestMultiErrorErrorsCopy(t *testing.T) {
 		errors.New("baz"),
 	}
 	me := newMultiError(errList...)
-	expect(t, errList, me.Errors())
+	assert.Equal(t, errList, me.Errors())
+}
+
+func TestErrRequiredFlags_Error(t *testing.T) {
+	missingFlags := []string{"flag1", "flag2"}
+	err := &errRequiredFlags{missingFlags: missingFlags}
+	expectedMsg := "Required flags \"flag1, flag2\" not set"
+	assert.Equal(t, expectedMsg, err.Error())
+
+	missingFlags = []string{"flag1"}
+	err = &errRequiredFlags{missingFlags: missingFlags}
+	expectedMsg = "Required flag \"flag1\" not set"
+	assert.Equal(t, expectedMsg, err.Error())
 }

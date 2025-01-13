@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -8,9 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var (
-	bothEnvFlagsAreSetError = fmt.Errorf("cannot set both flags `--env` and `--no-env`")
-)
+var errBothEnvFlagsAreSet = fmt.Errorf("cannot set both flags `--env` and `--no-env`")
 
 type boolWithInverseTestCase struct {
 	args    []string
@@ -23,7 +22,7 @@ type boolWithInverseTestCase struct {
 func (tc *boolWithInverseTestCase) Run(t *testing.T, flagWithInverse *BoolWithInverseFlag) error {
 	cmd := &Command{
 		Flags:  []Flag{flagWithInverse},
-		Action: func(ctx *Context) error { return nil },
+		Action: func(context.Context, *Command) error { return nil },
 	}
 
 	for key, val := range tc.envVars {
@@ -97,7 +96,7 @@ func TestBoolWithInverseBasic(t *testing.T) {
 		},
 		{
 			args: []string{"--env", "--no-env"},
-			err:  bothEnvFlagsAreSetError,
+			err:  errBothEnvFlagsAreSet,
 		},
 	}
 
@@ -115,12 +114,12 @@ func TestBoolWithInverseAction(t *testing.T) {
 				Name: "env",
 
 				// Setting env to the opposite to test flag Action is working as intended
-				Action: func(ctx *Context, value bool) error {
+				Action: func(_ context.Context, cmd *Command, value bool) error {
 					if value {
-						return ctx.Set("env", "false")
+						return cmd.Set("env", "false")
 					}
 
-					return ctx.Set("env", "true")
+					return cmd.Set("env", "true")
 				},
 			},
 		}
@@ -145,7 +144,7 @@ func TestBoolWithInverseAction(t *testing.T) {
 		},
 		{
 			args: []string{"--env", "--no-env"},
-			err:  bothEnvFlagsAreSetError,
+			err:  errBothEnvFlagsAreSet,
 		},
 	}
 
@@ -183,7 +182,7 @@ func TestBoolWithInverseAlias(t *testing.T) {
 		},
 		{
 			args: []string{"--do-env", "--no-do-env"},
-			err:  bothEnvFlagsAreSetError,
+			err:  errBothEnvFlagsAreSet,
 		},
 	}
 
@@ -200,6 +199,7 @@ func TestBoolWithInverseEnvVars(t *testing.T) {
 			BoolFlag: &BoolFlag{
 				Name:    "env",
 				Sources: EnvVars("ENV"),
+				Local:   true,
 			},
 		}
 	}
@@ -231,10 +231,22 @@ func TestBoolWithInverseEnvVars(t *testing.T) {
 			value:   false,
 		},
 		{
-			err: bothEnvFlagsAreSetError,
+			err: errBothEnvFlagsAreSet,
 			envVars: map[string]string{
 				"ENV":    "true",
 				"NO-ENV": "true",
+			},
+		},
+		{
+			err: fmt.Errorf("could not parse \"true_env\" as bool value from environment variable \"ENV\" for flag env: parse error"),
+			envVars: map[string]string{
+				"ENV": "true_env",
+			},
+		},
+		{
+			err: fmt.Errorf("could not parse \"false_env\" as bool value from environment variable \"NO-ENV\" for flag no-env: parse error"),
+			envVars: map[string]string{
+				"NO-ENV": "false_env",
 			},
 		},
 	}
@@ -308,11 +320,11 @@ func TestBoolWithInverseRequired(t *testing.T) {
 		{
 			toBeSet: false,
 			value:   false,
-			err:     fmt.Errorf(`Required flag "env" not set`),
+			err:     fmt.Errorf(`Required flag "no-env" not set`),
 		},
 		{
 			args: []string{"--env", "--no-env"},
-			err:  bothEnvFlagsAreSetError,
+			err:  errBothEnvFlagsAreSet,
 		},
 	}
 
@@ -332,30 +344,85 @@ func TestBoolWithInverseNames(t *testing.T) {
 	}
 	names := flag.Names()
 
-	if len(names) != 2 {
-		t.Errorf("expected 2 names, got %d", len(names))
-		return
+	require.Len(t, names, 2)
+	require.Equal(t, "env", names[0], "expected first name to be `env`")
+	require.Equal(t, "no-env", names[1], "expected first name to be `no-env`")
+}
+
+func TestBoolWithInverseString(t *testing.T) {
+	tcs := []struct {
+		testName      string
+		flagName      string
+		required      bool
+		usage         string
+		inversePrefix string
+		expected      string
+	}{
+		{
+			testName: "empty inverse prefix",
+			flagName: "",
+			required: true,
+			expected: "--[no-]\t",
+		},
+		{
+			testName: "single-char flag name",
+			flagName: "e",
+			required: true,
+			expected: "-[no-]e\t",
+		},
+		{
+			testName: "multi-char flag name",
+			flagName: "env",
+			required: true,
+			expected: "--[no-]env\t",
+		},
+		{
+			testName: "required with usage",
+			flagName: "env",
+			required: true,
+			usage:    "env usage",
+			expected: "--[no-]env\tenv usage",
+		},
+		{
+			testName: "required without usage",
+			flagName: "env",
+			required: true,
+			expected: "--[no-]env\t",
+		},
+		{
+			testName: "not required with default usage",
+			flagName: "env",
+			required: false,
+			expected: "--[no-]env\t(default: false)",
+		},
+		{
+			testName:      "custom inverse prefix",
+			flagName:      "env",
+			required:      true,
+			inversePrefix: "nope-",
+			expected:      "--[nope-]env\t",
+		},
+		{
+			testName: "empty inverse prefix",
+			flagName: "env",
+			required: true,
+			expected: "--[no-]env\t",
+		},
 	}
 
-	if names[0] != "env" {
-		t.Errorf("expected first name to be `env`, got `%s`", names[0])
-		return
-	}
+	for _, tc := range tcs {
+		t.Run(tc.testName, func(t *testing.T) {
+			flag := &BoolWithInverseFlag{
+				BoolFlag: &BoolFlag{
+					Name:     tc.flagName,
+					Usage:    tc.usage,
+					Required: tc.required,
+				},
+				InversePrefix: tc.inversePrefix,
+			}
 
-	if names[1] != "no-env" {
-		t.Errorf("expected first name to be `no-env`, got `%s`", names[1])
-		return
-	}
-
-	flagString := flag.String()
-	if strings.Contains(flagString, "--env") == false {
-		t.Errorf("expected `%s` to contain `--env`", flagString)
-		return
-	}
-
-	if strings.Contains(flagString, "--no-env") == false {
-		t.Errorf("expected `%s` to contain `--no-env`", flagString)
-		return
+			require.Equal(t, tc.expected, flag.String())
+		})
 	}
 }
 
@@ -378,7 +445,6 @@ func TestBoolWithInverseDestination(t *testing.T) {
 	checkAndReset := func(expectedCount int, expectedValue bool) error {
 		if *count != expectedCount {
 			return fmt.Errorf("expected count to be %d, got %d", expectedCount, *count)
-
 		}
 
 		if *destination != expectedValue {

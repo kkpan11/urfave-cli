@@ -47,7 +47,6 @@ func (m *multiError) Errors() []error {
 
 type requiredFlagsErr interface {
 	error
-	getMissingFlags() []string
 }
 
 type errRequiredFlags struct {
@@ -55,16 +54,11 @@ type errRequiredFlags struct {
 }
 
 func (e *errRequiredFlags) Error() string {
-	numberOfMissingFlags := len(e.missingFlags)
-	if numberOfMissingFlags == 1 {
+	if len(e.missingFlags) == 1 {
 		return fmt.Sprintf("Required flag %q not set", e.missingFlags[0])
 	}
 	joinedMissingFlags := strings.Join(e.missingFlags, ", ")
 	return fmt.Sprintf("Required flags %q not set", joinedMissingFlags)
-}
-
-func (e *errRequiredFlags) getMissingFlags() []string {
-	return e.missingFlags
 }
 
 type mutuallyExclusiveGroup struct {
@@ -81,18 +75,11 @@ type mutuallyExclusiveGroupRequiredFlag struct {
 }
 
 func (e *mutuallyExclusiveGroupRequiredFlag) Error() string {
-
 	var missingFlags []string
 	for _, grpf := range e.flags.Flags {
 		var grpString []string
 		for _, f := range grpf {
 			grpString = append(grpString, f.Names()...)
-		}
-		if len(e.flags.Flags) == 1 {
-			err := errRequiredFlags{
-				missingFlags: grpString,
-			}
-			return err.Error()
 		}
 		missingFlags = append(missingFlags, strings.Join(grpString, " "))
 	}
@@ -148,10 +135,6 @@ func (ee *exitError) Error() string {
 
 func (ee *exitError) ExitCode() int {
 	return ee.exitCode
-}
-
-func (ee *exitError) Unwrap() error {
-	return ee.err
 }
 
 // HandleExitCoder handles errors implementing ExitCoder by printing their

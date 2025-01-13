@@ -2,7 +2,6 @@ package cli
 
 import (
 	"errors"
-	"fmt"
 	"strconv"
 )
 
@@ -25,17 +24,20 @@ type boolValue struct {
 	count       *int
 }
 
-func (cCtx *Context) Bool(name string) bool {
-	if v, ok := cCtx.Value(name).(bool); ok {
+func (cmd *Command) Bool(name string) bool {
+	if v, ok := cmd.Value(name).(bool); ok {
+		tracef("bool available for flag name %[1]q with value=%[2]v (cmd=%[3]q)", name, v, cmd.Name)
 		return v
 	}
+
+	tracef("bool NOT available for flag name %[1]q (cmd=%[2]q)", name, cmd.Name)
 	return false
 }
 
 // Below functions are to satisfy the ValueCreator interface
 
 // Create creates the bool value
-func (i boolValue) Create(val bool, p *bool, c BoolConfig) Value {
+func (b boolValue) Create(val bool, p *bool, c BoolConfig) Value {
 	*p = val
 	if c.Count == nil {
 		c.Count = new(int)
@@ -47,8 +49,8 @@ func (i boolValue) Create(val bool, p *bool, c BoolConfig) Value {
 }
 
 // ToString formats the bool value
-func (i boolValue) ToString(b bool) string {
-	return fmt.Sprintf("%v", b)
+func (b boolValue) ToString(value bool) string {
+	return strconv.FormatBool(value)
 }
 
 // Below functions are to satisfy the flag.Value interface
@@ -69,17 +71,11 @@ func (b *boolValue) Set(s string) error {
 func (b *boolValue) Get() interface{} { return *b.destination }
 
 func (b *boolValue) String() string {
-	if b.destination != nil {
-		return strconv.FormatBool(*b.destination)
-	}
-	return strconv.FormatBool(false)
+	return strconv.FormatBool(*b.destination)
 }
 
 func (b *boolValue) IsBoolFlag() bool { return true }
 
 func (b *boolValue) Count() int {
-	if b.count != nil {
-		return *b.count
-	}
-	return 0
+	return *b.count
 }

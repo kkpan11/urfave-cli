@@ -7,7 +7,10 @@ import (
 	"os"
 	"time"
 
-	"github.com/urfave/cli/v3"
+	// Alias the package import to make the examples runnable on pkg.go.dev.
+	//
+	// See issue #1811.
+	cli "github.com/urfave/cli/v3"
 )
 
 func ExampleCommand_Run() {
@@ -17,8 +20,8 @@ func ExampleCommand_Run() {
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "name", Value: "pat", Usage: "a name to say"},
 		},
-		Action: func(cCtx *cli.Context) error {
-			fmt.Printf("Hello %[1]v\n", cCtx.String("name"))
+		Action: func(_ context.Context, cmd *cli.Command) error {
+			fmt.Printf("Hello %[1]v\n", cmd.String("name"))
 			return nil
 		},
 		Authors: []any{
@@ -62,8 +65,8 @@ func ExampleCommand_Run_subcommand() {
 								Usage: "Name of the person to greet",
 							},
 						},
-						Action: func(cCtx *cli.Context) error {
-							fmt.Println("Hello,", cCtx.String("name"))
+						Action: func(_ context.Context, cmd *cli.Command) error {
+							fmt.Println("Hello,", cmd.String("name"))
 							return nil
 						},
 					},
@@ -95,13 +98,15 @@ func ExampleCommand_Run_appHelp() {
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "name", Value: "bob", Usage: "a name to say"},
 		},
+		Arguments: cli.AnyArguments,
 		Commands: []*cli.Command{
 			{
 				Name:        "describeit",
 				Aliases:     []string{"d"},
 				Usage:       "use it to see a description",
 				Description: "This is how we describe describeit the function",
-				Action: func(*cli.Context) error {
+				ArgsUsage:   "[arguments...]",
+				Action: func(context.Context, *cli.Command) error {
 					fmt.Printf("i like to describe things")
 					return nil
 				},
@@ -139,8 +144,8 @@ func ExampleCommand_Run_appHelp() {
 	//
 	// GLOBAL OPTIONS:
 	//    --name value   a name to say (default: "bob")
-	//    --help, -h     show help (default: false)
-	//    --version, -v  print the version (default: false)
+	//    --help, -h     show help
+	//    --version, -v  print the version
 }
 
 func ExampleCommand_Run_commandHelp() {
@@ -149,8 +154,8 @@ func ExampleCommand_Run_commandHelp() {
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "name", Value: "pat", Usage: "a name to say"},
 		},
-		Action: func(cCtx *cli.Context) error {
-			fmt.Fprintf(cCtx.Command.Root().Writer, "hello to %[1]q\n", cCtx.String("name"))
+		Action: func(_ context.Context, cmd *cli.Command) error {
+			fmt.Fprintf(cmd.Root().Writer, "hello to %[1]q\n", cmd.String("name"))
 			return nil
 		},
 		Commands: []*cli.Command{
@@ -159,7 +164,8 @@ func ExampleCommand_Run_commandHelp() {
 				Aliases:     []string{"d"},
 				Usage:       "use it to see a description",
 				Description: "This is how we describe describeit the function",
-				Action: func(*cli.Context) error {
+				ArgsUsage:   "[arguments...]",
+				Action: func(context.Context, *cli.Command) error {
 					fmt.Println("i like to describe things")
 					return nil
 				},
@@ -176,16 +182,13 @@ func ExampleCommand_Run_commandHelp() {
 	//    greet describeit - use it to see a description
 	//
 	// USAGE:
-	//    greet describeit [command [command options]] [arguments...]
+	//    greet describeit [arguments...]
 	//
 	// DESCRIPTION:
 	//    This is how we describe describeit the function
 	//
-	// COMMANDS:
-	//    help, h  Shows a list of commands or help for one command
-	//
 	// OPTIONS:
-	//    --help, -h  show help (default: false)
+	//    --help, -h  show help
 }
 
 func ExampleCommand_Run_noAction() {
@@ -200,13 +203,10 @@ func ExampleCommand_Run_noAction() {
 	//    greet - A new cli application
 	//
 	// USAGE:
-	//    greet [global options] [command [command options]] [arguments...]
-	//
-	// COMMANDS:
-	//    help, h  Shows a list of commands or help for one command
+	//    greet [global options]
 	//
 	// GLOBAL OPTIONS:
-	//    --help, -h  show help (default: false)
+	//    --help, -h  show help
 }
 
 func ExampleCommand_Run_subcommandNoAction() {
@@ -217,6 +217,7 @@ func ExampleCommand_Run_subcommandNoAction() {
 				Name:        "describeit",
 				Aliases:     []string{"d"},
 				Usage:       "use it to see a description",
+				ArgsUsage:   "[arguments...]",
 				Description: "This is how we describe describeit the function",
 			},
 		},
@@ -237,7 +238,7 @@ func ExampleCommand_Run_subcommandNoAction() {
 	//    This is how we describe describeit the function
 	//
 	// OPTIONS:
-	//    --help, -h  show help (default: false)
+	//    --help, -h  show help
 }
 
 func ExampleCommand_Run_shellComplete_bash_withShortFlag() {
@@ -263,11 +264,8 @@ func ExampleCommand_Run_shellComplete_bash_withShortFlag() {
 	_ = cmd.Run(context.Background(), os.Args)
 	// Output:
 	// --other
-	// -o
 	// --xyz
-	// -x
 	// --help
-	// -h
 }
 
 func ExampleCommand_Run_shellComplete_bash_withLongFlag() {
@@ -347,7 +345,7 @@ func ExampleCommand_Run_shellComplete_bash() {
 				Aliases:     []string{"d"},
 				Usage:       "use it to see a description",
 				Description: "This is how we describe describeit the function",
-				Action: func(*cli.Context) error {
+				Action: func(context.Context, *cli.Command) error {
 					fmt.Printf("i like to describe things")
 					return nil
 				},
@@ -355,7 +353,7 @@ func ExampleCommand_Run_shellComplete_bash() {
 				Name:        "next",
 				Usage:       "next example",
 				Description: "more stuff to see when generating shell completion",
-				Action: func(*cli.Context) error {
+				Action: func(context.Context, *cli.Command) error {
 					fmt.Printf("the next example")
 					return nil
 				},
@@ -370,10 +368,8 @@ func ExampleCommand_Run_shellComplete_bash() {
 	_ = cmd.Run(context.Background(), os.Args)
 	// Output:
 	// describeit
-	// d
 	// next
 	// help
-	// h
 }
 
 func ExampleCommand_Run_shellComplete_zsh() {
@@ -386,7 +382,7 @@ func ExampleCommand_Run_shellComplete_zsh() {
 				Aliases:     []string{"d"},
 				Usage:       "use it to see a description",
 				Description: "This is how we describe describeit the function",
-				Action: func(*cli.Context) error {
+				Action: func(context.Context, *cli.Command) error {
 					fmt.Printf("i like to describe things")
 					return nil
 				},
@@ -394,7 +390,7 @@ func ExampleCommand_Run_shellComplete_zsh() {
 				Name:        "next",
 				Usage:       "next example",
 				Description: "more stuff to see when generating bash completion",
-				Action: func(*cli.Context) error {
+				Action: func(context.Context, *cli.Command) error {
 					fmt.Printf("the next example")
 					return nil
 				},
@@ -409,10 +405,8 @@ func ExampleCommand_Run_shellComplete_zsh() {
 	_ = cmd.Run(context.Background(), os.Args)
 	// Output:
 	// describeit:use it to see a description
-	// d:use it to see a description
 	// next:next example
 	// help:Shows a list of commands or help for one command
-	// h:Shows a list of commands or help for one command
 }
 
 func ExampleCommand_Run_sliceValues() {
@@ -423,11 +417,12 @@ func ExampleCommand_Run_sliceValues() {
 			&cli.FloatSliceFlag{Name: "float64Slice"},
 			&cli.IntSliceFlag{Name: "intSlice"},
 		},
-		Action: func(cCtx *cli.Context) error {
-			for i, v := range cCtx.FlagNames() {
-				fmt.Printf("%d-%s %#v\n", i, v, cCtx.Value(v))
+		HideHelp: true,
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			for i, v := range cmd.FlagNames() {
+				fmt.Printf("%d-%s %#v\n", i, v, cmd.Value(v))
 			}
-			err := cCtx.Err()
+			err := ctx.Err()
 			fmt.Println("error:", err)
 			return err
 		},
@@ -455,12 +450,13 @@ func ExampleCommand_Run_mapValues() {
 		Flags: []cli.Flag{
 			&cli.StringMapFlag{Name: "stringMap"},
 		},
-		Action: func(cCtx *cli.Context) error {
-			for i, v := range cCtx.FlagNames() {
-				fmt.Printf("%d-%s %#v\n", i, v, cCtx.StringMap(v))
+		HideHelp: true,
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			for i, v := range cmd.FlagNames() {
+				fmt.Printf("%d-%s %#v\n", i, v, cmd.StringMap(v))
 			}
-			fmt.Printf("notfound %#v\n", cCtx.StringMap("notfound"))
-			err := cCtx.Err()
+			fmt.Printf("notfound %#v\n", cmd.StringMap("notfound"))
+			err := ctx.Err()
 			fmt.Println("error:", err)
 			return err
 		},
@@ -490,7 +486,7 @@ func ExampleBoolWithInverseFlag() {
 		Flags: []cli.Flag{
 			flagWithInverse,
 		},
-		Action: func(ctx *cli.Context) error {
+		Action: func(_ context.Context, cmd *cli.Command) error {
 			if flagWithInverse.IsSet() {
 				if flagWithInverse.Value() {
 					fmt.Println("env is set")
@@ -525,8 +521,8 @@ func ExampleCommand_Suggest() {
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "name", Value: "squirrel", Usage: "a name to say"},
 		},
-		Action: func(cCtx *cli.Context) error {
-			fmt.Printf("Hello %v\n", cCtx.String("name"))
+		Action: func(_ context.Context, cmd *cli.Command) error {
+			fmt.Printf("Hello %v\n", cmd.String("name"))
 			return nil
 		},
 	}
@@ -549,8 +545,8 @@ func ExampleCommand_Suggest_command() {
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "name", Value: "squirrel", Usage: "a name to say"},
 		},
-		Action: func(cCtx *cli.Context) error {
-			fmt.Printf("Hello %v\n", cCtx.String("name"))
+		Action: func(_ context.Context, cmd *cli.Command) error {
+			fmt.Printf("Hello %v\n", cmd.String("name"))
 			return nil
 		},
 		Commands: []*cli.Command{
@@ -563,8 +559,8 @@ func ExampleCommand_Suggest_command() {
 				Flags: []cli.Flag{
 					&cli.BoolFlag{Name: "smiling"},
 				},
-				Action: func(cCtx *cli.Context) error {
-					if cCtx.Bool("smiling") {
+				Action: func(_ context.Context, cmd *cli.Command) error {
+					if cmd.Bool("smiling") {
 						fmt.Println("😀")
 					}
 					fmt.Println("Hello, neighbors")

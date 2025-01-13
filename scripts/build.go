@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/urfave/cli/v3"
 )
@@ -41,8 +42,11 @@ const (
 )
 
 func main() {
-	top, err := func() (string, error) {
-		if v, err := sh("git", "rev-parse", "--show-toplevel"); err == nil {
+	topDir, err := func() (string, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+		defer cancel()
+
+		if v, err := sh(ctx, "git", "rev-parse", "--show-toplevel"); err == nil {
 			return strings.TrimSpace(v), nil
 		}
 
@@ -144,12 +148,12 @@ func main() {
 				Usage: "set build tags",
 			},
 			&cli.StringFlag{
-				Name:  "top",
-				Value: top,
+				Name:  "top-dir",
+				Value: topDir,
 			},
 			&cli.StringSliceFlag{
 				Name:  "packages",
-				Value: []string{"cli", "internal/build"},
+				Value: []string{"cli", "scripts"},
 			},
 		},
 	}
@@ -159,8 +163,8 @@ func main() {
 	}
 }
 
-func sh(exe string, args ...string) (string, error) {
-	cmd := exec.Command(exe, args...)
+func sh(ctx context.Context, exe string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, exe, args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stderr = os.Stderr
 
@@ -170,17 +174,17 @@ func sh(exe string, args ...string) (string, error) {
 }
 
 func topRunAction(arg string, args ...string) cli.ActionFunc {
-	return func(cCtx *cli.Context) error {
-		if err := os.Chdir(cCtx.String("top")); err != nil {
+	return func(ctx context.Context, cmd *cli.Command) error {
+		if err := os.Chdir(cmd.String("top-dir")); err != nil {
 			return err
 		}
 
-		return runCmd(arg, args...)
+		return runCmd(ctx, arg, args...)
 	}
 }
 
-func runCmd(arg string, args ...string) error {
-	cmd := exec.Command(arg, args...)
+func runCmd(ctx context.Context, arg string, args ...string) error {
+	cmd := exec.CommandContext(ctx, arg, args...)
 
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
@@ -204,7 +208,7 @@ func downloadFile(src, dest string, dirPerm, perm os.FileMode) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 300 {
-		return fmt.Errorf("download response %[1]v", resp.StatusCode)
+		return fmt.Errorf("download file from %[2]s into %[3]s: response %[1]v", resp.StatusCode, src, dest)
 	}
 
 	if err := os.MkdirAll(filepath.Dir(dest), dirPerm); err != nil {
@@ -227,14 +231,14 @@ func downloadFile(src, dest string, dirPerm, perm os.FileMode) error {
 	return os.Chmod(dest, perm)
 }
 
-func VetActionFunc(cCtx *cli.Context) error {
-	return runCmd("go", "vet", cCtx.String("top")+"/...")
+func VetActionFunc(ctx context.Context, cmd *cli.Command) error {
+	return runCmd(ctx, "go", "vet", cmd.String("top-dir")+"/...")
 }
 
-func TestActionFunc(c *cli.Context) error {
-	tags := c.String("tags")
+func TestActionFunc(ctx context.Context, cmd *cli.Command) error {
+	tags := cmd.String("tags")
 
-	for _, pkg := range c.StringSlice("packages") {
+	for _, pkg := range cmd.StringSlice("packages") {
 		packageName := "github.com/urfave/cli/v3"
 
 		if pkg != "cli" {
@@ -255,12 +259,12 @@ func TestActionFunc(c *cli.Context) error {
 			packageName,
 		}...)
 
-		if err := runCmd("go", args...); err != nil {
+		if err := runCmd(ctx, "go", args...); err != nil {
 			return err
 		}
 	}
 
-	return testCleanup(c.StringSlice("packages"))
+	return testCleanup(cmd.StringSlice("packages"))
 }
 
 func testCleanup(packages []string) error {
@@ -285,11 +289,11 @@ func testCleanup(packages []string) error {
 		}
 	}
 
-	return os.WriteFile("coverage.txt", out.Bytes(), 0644)
+	return os.WriteFile("coverage.txt", out.Bytes(), 0o644)
 }
 
-func GfmrunActionFunc(cCtx *cli.Context) error {
-	top := cCtx.String("top")
+func GfmrunActionFunc(ctx context.Context, cmd *cli.Command) error {
+	docsDir := filepath.Join(cmd.String("top-dir"), "docs")
 
 	bash, err := exec.LookPath("bash")
 	if err != nil {
@@ -312,9 +316,9 @@ func GfmrunActionFunc(cCtx *cli.Context) error {
 		return err
 	}
 
-	fmt.Fprintf(cCtx.Command.ErrWriter, "# ---> workspace/TMPDIR is %q\n", tmpDir)
+	fmt.Fprintf(cmd.ErrWriter, "# ---> workspace/TMPDIR is %q\n", tmpDir)
 
-	if err := runCmd("go", "work", "init", top); err != nil {
+	if err := runCmd(ctx, "go", "work", "init", docsDir); err != nil {
 		return err
 	}
 
@@ -324,12 +328,12 @@ func GfmrunActionFunc(cCtx *cli.Context) error {
 		return err
 	}
 
-	dirPath := cCtx.Args().Get(0)
+	dirPath := cmd.Args().Get(0)
 	if dirPath == "" {
 		dirPath = "README.md"
 	}
 
-	walk := cCtx.Bool("walk")
+	walk := cmd.Bool("walk")
 	sources := []string{}
 
 	if walk {
@@ -392,7 +396,7 @@ func GfmrunActionFunc(cCtx *cli.Context) error {
 		gfmArgs = append(gfmArgs, "--sources", src)
 	}
 
-	if err := runCmd("gfmrun", gfmArgs...); err != nil {
+	if err := runCmd(ctx, "gfmrun", gfmArgs...); err != nil {
 		return err
 	}
 
@@ -402,27 +406,27 @@ func GfmrunActionFunc(cCtx *cli.Context) error {
 // checkBinarySizeActionFunc checks the size of an example binary to ensure that we are keeping size down
 // this was originally inspired by https://github.com/urfave/cli/issues/1055, and followed up on as a part
 // of https://github.com/urfave/cli/issues/1057
-func checkBinarySizeActionFunc(c *cli.Context) (err error) {
+func checkBinarySizeActionFunc(ctx context.Context, cmd *cli.Command) (err error) {
 	const (
-		cliSourceFilePath    = "./internal/example-cli/example-cli.go"
-		cliBuiltFilePath     = "./internal/example-cli/built-example"
-		helloSourceFilePath  = "./internal/example-hello-world/example-hello-world.go"
-		helloBuiltFilePath   = "./internal/example-hello-world/built-example"
+		cliSourceFilePath    = "./examples/example-cli/example-cli.go"
+		cliBuiltFilePath     = "./examples/example-cli/built-example"
+		helloSourceFilePath  = "./examples/example-hello-world/example-hello-world.go"
+		helloBuiltFilePath   = "./examples/example-hello-world/built-example"
 		desiredMaxBinarySize = 2.2
 		desiredMinBinarySize = 1.49
 		mbStringFormatter    = "%.1fMB"
 	)
 
-	tags := c.String("tags")
+	tags := cmd.String("tags")
 
 	// get cli example size
-	cliSize, err := getSize(cliSourceFilePath, cliBuiltFilePath, tags)
+	cliSize, err := getSize(ctx, cliSourceFilePath, cliBuiltFilePath, tags)
 	if err != nil {
 		return err
 	}
 
 	// get hello world size
-	helloSize, err := getSize(helloSourceFilePath, helloBuiltFilePath, tags)
+	helloSize, err := getSize(ctx, helloSourceFilePath, helloBuiltFilePath, tags)
 	if err != nil {
 		return err
 	}
@@ -453,7 +457,7 @@ func checkBinarySizeActionFunc(c *cli.Context) (err error) {
 		fmt.Println("") // visual spacing
 		fmt.Println("     The binary is smaller than the target min size, which is great news!")
 		fmt.Println("     That means that your changes are shrinking the binary size.")
-		fmt.Println("     You'll want to go into ./internal/build/build.go and decrease")
+		fmt.Println("     You'll want to go into ./scripts/build.go and decrease")
 		fmt.Println("     the desiredMinBinarySize, and also probably decrease the ")
 		fmt.Println("     desiredMaxBinarySize by the same amount. That will ensure that")
 		fmt.Println("     future PRs will enforce the newly shrunk binary sizes.")
@@ -473,7 +477,7 @@ func checkBinarySizeActionFunc(c *cli.Context) (err error) {
 		fmt.Println("     Larger binary sizes for this package can dissuade its use.")
 		fmt.Println("     If this change is worth the increase, then we can up the")
 		fmt.Println("     desired max binary size. To do that you'll want to go into")
-		fmt.Println("     ./internal/build/build.go and increase the desiredMaxBinarySize,")
+		fmt.Println("     ./scripts/build.go and increase the desiredMaxBinarySize,")
 		fmt.Println("     and increase the desiredMinBinarySize by the same amount.")
 		fmt.Println("") // visual spacing
 		os.Exit(1)
@@ -484,61 +488,62 @@ func checkBinarySizeActionFunc(c *cli.Context) (err error) {
 	return nil
 }
 
-func GenerateActionFunc(cCtx *cli.Context) error {
-	top := cCtx.String("top")
+func GenerateActionFunc(ctx context.Context, cmd *cli.Command) error {
+	topDir := cmd.String("top-dir")
 
-	cliDocs, err := sh("go", "doc", "-all", top)
+	cliDocs, err := sh(ctx, "go", "doc", "-all", topDir)
 	if err != nil {
 		return err
 	}
 
 	return os.WriteFile(
-		filepath.Join(top, "godoc-current.txt"),
+		filepath.Join(topDir, "godoc-current.txt"),
 		[]byte(cliDocs),
-		0644,
+		0o644,
 	)
 }
 
-func DiffCheckActionFunc(cCtx *cli.Context) error {
-	if err := os.Chdir(cCtx.String("top")); err != nil {
+func DiffCheckActionFunc(ctx context.Context, cmd *cli.Command) error {
+	if err := os.Chdir(cmd.String("top-dir")); err != nil {
 		return err
 	}
 
-	if err := runCmd("git", "diff", "--exit-code"); err != nil {
+	if err := runCmd(ctx, "git", "diff", "--exit-code"); err != nil {
 		return err
 	}
 
-	return runCmd("git", "diff", "--cached", "--exit-code")
+	return runCmd(ctx, "git", "diff", "--cached", "--exit-code")
 }
 
-func EnsureGoimportsActionFunc(cCtx *cli.Context) error {
-	top := cCtx.String("top")
-	if err := os.Chdir(top); err != nil {
+func EnsureGoimportsActionFunc(ctx context.Context, cmd *cli.Command) error {
+	topDir := cmd.String("top-dir")
+	if err := os.Chdir(topDir); err != nil {
 		return err
 	}
 
 	if err := runCmd(
+		ctx,
 		"goimports",
 		"-d",
-		filepath.Join(top, "internal/build/build.go"),
+		filepath.Join(topDir, "scripts/build.go"),
 	); err == nil {
 		return nil
 	}
 
-	os.Setenv("GOBIN", filepath.Join(top, ".local/bin"))
+	os.Setenv("GOBIN", filepath.Join(topDir, ".local/bin"))
 
-	return runCmd("go", "install", "golang.org/x/tools/cmd/goimports@latest")
+	return runCmd(ctx, "go", "install", "golang.org/x/tools/cmd/goimports@latest")
 }
 
-func EnsureGfmrunActionFunc(cCtx *cli.Context) error {
-	top := cCtx.String("top")
-	gfmrunExe := filepath.Join(top, ".local/bin/gfmrun")
+func EnsureGfmrunActionFunc(ctx context.Context, cmd *cli.Command) error {
+	topDir := cmd.String("top-dir")
+	gfmrunExe := filepath.Join(topDir, ".local/bin/gfmrun")
 
-	if err := os.Chdir(top); err != nil {
+	if err := os.Chdir(topDir); err != nil {
 		return err
 	}
 
-	if v, err := sh(gfmrunExe, "--version"); err == nil && strings.TrimSpace(v) == gfmrunVersion {
+	if v, err := sh(ctx, gfmrunExe, "--version"); err == nil && strings.TrimSpace(v) == gfmrunVersion {
 		return nil
 	}
 
@@ -552,61 +557,62 @@ func EnsureGfmrunActionFunc(cCtx *cli.Context) error {
 		return err
 	}
 
-	return downloadFile(gfmrunURL.String(), gfmrunExe, 0755, 0755)
+	return downloadFile(gfmrunURL.String(), gfmrunExe, 0o755, 0o755)
 }
 
-func EnsureMkdocsActionFunc(cCtx *cli.Context) error {
-	if err := os.Chdir(cCtx.String("top")); err != nil {
+func EnsureMkdocsActionFunc(ctx context.Context, cmd *cli.Command) error {
+	if err := os.Chdir(cmd.String("top-dir")); err != nil {
 		return err
 	}
 
-	if err := runCmd("mkdocs", "--version"); err == nil {
+	if err := runCmd(ctx, "mkdocs", "--version"); err == nil {
 		return nil
 	}
 
-	if cCtx.Bool("upgrade-pip") {
-		if err := runCmd("pip", "install", "-U", "pip"); err != nil {
+	if cmd.Bool("upgrade-pip") {
+		if err := runCmd(ctx, "pip", "install", "-U", "pip"); err != nil {
 			return err
 		}
 	}
 
-	return runCmd("pip", "install", "-r", "mkdocs-reqs.txt")
+	return runCmd(ctx, "pip", "install", "-r", "mkdocs-reqs.txt")
 }
 
-func SetMkdocsRemoteActionFunc(cCtx *cli.Context) error {
-	ghToken := strings.TrimSpace(cCtx.String("github-token"))
+func SetMkdocsRemoteActionFunc(ctx context.Context, cmd *cli.Command) error {
+	ghToken := strings.TrimSpace(cmd.String("github-token"))
 	if ghToken == "" {
 		return errors.New("empty github token")
 	}
 
-	if err := os.Chdir(cCtx.String("top")); err != nil {
+	if err := os.Chdir(cmd.String("top-dir")); err != nil {
 		return err
 	}
 
-	if err := runCmd("git", "remote", "rm", "origin"); err != nil {
+	if err := runCmd(ctx, "git", "remote", "rm", "origin"); err != nil {
 		return err
 	}
 
 	return runCmd(
+		ctx,
 		"git", "remote", "add", "origin",
 		fmt.Sprintf("https://x-access-token:%[1]s@github.com/urfave/cli.git", ghToken),
 	)
 }
 
-func LintActionFunc(cCtx *cli.Context) error {
-	top := cCtx.String("top")
-	if err := os.Chdir(top); err != nil {
+func LintActionFunc(ctx context.Context, cmd *cli.Command) error {
+	topDir := cmd.String("top-dir")
+	if err := os.Chdir(topDir); err != nil {
 		return err
 	}
 
-	out, err := sh(filepath.Join(top, ".local/bin/goimports"), "-l", ".")
+	out, err := sh(ctx, filepath.Join(topDir, ".local/bin/goimports"), "-l", ".")
 	if err != nil {
 		return err
 	}
 
 	if strings.TrimSpace(out) != "" {
-		fmt.Fprintln(cCtx.Command.ErrWriter, "# ---> goimports -l is non-empty:")
-		fmt.Fprintln(cCtx.Command.ErrWriter, out)
+		fmt.Fprintln(cmd.ErrWriter, "# ---> goimports -l is non-empty:")
+		fmt.Fprintln(cmd.ErrWriter, out)
 
 		return errors.New("goimports needed")
 	}
@@ -614,17 +620,18 @@ func LintActionFunc(cCtx *cli.Context) error {
 	return nil
 }
 
-func V3Diff(cCtx *cli.Context) error {
-	if err := os.Chdir(cCtx.String("top")); err != nil {
+func V3Diff(ctx context.Context, cmd *cli.Command) error {
+	if err := os.Chdir(cmd.String("top-dir")); err != nil {
 		return err
 	}
 
 	err := runCmd(
+		ctx,
 		"diff",
 		"--ignore-all-space",
 		"--minimal",
 		"--color="+func() string {
-			if cCtx.Bool("color") {
+			if cmd.Bool("color") {
 				return "always"
 			}
 			return "auto"
@@ -635,7 +642,6 @@ func V3Diff(cCtx *cli.Context) error {
 		"--label=b/godoc",
 		"godoc-current.txt",
 	)
-
 	if err != nil {
 		fmt.Printf("# %v ---> Hey! <---\n", badNewsEmoji)
 		fmt.Println(strings.TrimSpace(v3diffWarning))
@@ -644,7 +650,7 @@ func V3Diff(cCtx *cli.Context) error {
 	return err
 }
 
-func getSize(sourcePath, builtPath, tags string) (int64, error) {
+func getSize(ctx context.Context, sourcePath, builtPath, tags string) (int64, error) {
 	args := []string{"build"}
 
 	if tags != "" {
@@ -657,7 +663,7 @@ func getSize(sourcePath, builtPath, tags string) (int64, error) {
 		sourcePath,
 	}...)
 
-	if err := runCmd("go", args...); err != nil {
+	if err := runCmd(ctx, "go", args...); err != nil {
 		fmt.Println("issue getting size for example binary")
 		return 0, err
 	}

@@ -3,6 +3,8 @@ package cli
 import (
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestFlagMutuallyExclusiveFlags(t *testing.T) {
@@ -10,7 +12,7 @@ func TestFlagMutuallyExclusiveFlags(t *testing.T) {
 		MutuallyExclusiveFlags: []MutuallyExclusiveFlags{
 			{
 				Flags: [][]Flag{
-					[]Flag{
+					{
 						&IntFlag{
 							Name: "i",
 						},
@@ -18,7 +20,7 @@ func TestFlagMutuallyExclusiveFlags(t *testing.T) {
 							Name: "s",
 						},
 					},
-					[]Flag{
+					{
 						&IntFlag{
 							Name:    "t",
 							Aliases: []string{"ai"},
@@ -30,14 +32,10 @@ func TestFlagMutuallyExclusiveFlags(t *testing.T) {
 	}
 
 	err := cmd.Run(buildTestContext(t), []string{"foo"})
-	if err != nil {
-		t.Error(err)
-	}
+	assert.NoError(t, err)
 
 	err = cmd.Run(buildTestContext(t), []string{"foo", "--i", "10"})
-	if err != nil {
-		t.Error(err)
-	}
+	assert.NoError(t, err)
 
 	err = cmd.Run(buildTestContext(t), []string{"foo", "--i", "11", "--ai", "12"})
 	if err == nil {
@@ -60,9 +58,7 @@ func TestFlagMutuallyExclusiveFlags(t *testing.T) {
 	}
 
 	err = cmd.Run(buildTestContext(t), []string{"foo", "--i", "10"})
-	if err != nil {
-		t.Error(err)
-	}
+	assert.NoError(t, err)
 
 	err = cmd.Run(buildTestContext(t), []string{"foo", "--i", "11", "--ai", "12"})
 	if err == nil {
